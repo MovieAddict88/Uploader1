@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub Zip Uploader</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+            color: #c9d1d9;
+            min-height: 100vh;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 800px;
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 30px;
+            margin-top: 20px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #f0f6fc;
+            font-size: 2.2rem;
+            background: linear-gradient(90deg, #9370db, #6a5acd);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .description {
+            text-align: center;
+            margin-bottom: 30px;
+            line-height: 1.6;
+            color: #8b949e;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #f0f6fc;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-size: 16px;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #58a6ff;
+            box-shadow: 0 0 0 3px rgba(56, 139, 253, 0.15);
+        }
+        
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        
+        .file-input-container {
+            position: relative;
+            margin-bottom: 20px;
+        }
+        
+        .file-input {
+            padding: 40px 20px;
+            text-align: center;
+            border: 2px dashed #30363d;
+            border-radius: 8px;
+            background-color: rgba(13, 17, 23, 0.5);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .file-input:hover {
+            border-color: #58a6ff;
+            background-color: rgba(13, 17, 23, 0.8);
+        }
+        
+        .file-input.drag-over {
+            border-color: #3fb950;
+            background-color: rgba(35, 134, 54, 0.1);
+        }
+        
+        .file-input i {
+            font-size: 48px;
+            color: #58a6ff;
+            margin-bottom: 10px;
+            display: block;
+        }
+        
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(90deg, #238636 0%, #2ea043 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        
+        .btn:hover {
+            background: linear-gradient(90deg, #2ea043 0%, #3fb950 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(35, 134, 54, 0.4);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .progress-container {
+            margin-top: 20px;
+            display: none;
+        }
+        
+        .progress-bar {
+            height: 10px;
+            background-color: #21262d;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        
+        .progress {
+            height: 100%;
+            background: linear-gradient(90deg, #9370db, #6a5acd);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .status {
+            margin-top: 15px;
+            text-align: center;
+            font-size: 14px;
+            color: #8b949e;
+        }
+        
+        .result {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 8px;
+            background-color: rgba(13, 17, 23, 0.5);
+            display: none;
+        }
+        
+        .success {
+            border-left: 4px solid #3fb950;
+        }
+        
+        .error {
+            border-left: 4px solid #f85149;
+        }
+        
+        .result h3 {
+            margin-bottom: 10px;
+            color: #f0f6fc;
+        }
+        
+        .result pre {
+            background-color: #0d1117;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            color: #c9d1d9;
+        }
+        
+        .github-icon {
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+            width: 24px;
+            height: 24px;
+        }
+        
+        .instructions {
+            margin-top: 40px;
+            padding: 20px;
+            background-color: rgba(13, 17, 23, 0.5);
+            border-radius: 8px;
+            border-left: 4px solid #58a6ff;
+        }
+        
+        .instructions h3 {
+            margin-bottom: 15px;
+            color: #58a6ff;
+        }
+        
+        .instructions ol {
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+        
+        .instructions li {
+            margin-bottom: 10px;
+        }
+        
+        code {
+            background-color: #0d1117;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            color: #8b949e;
+        }
+        
+        footer {
+            margin-top: 40px;
+            text-align: center;
+            color: #8b949e;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1><svg class="github-icon" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+    </svg>GitHub Zip Uploader</h1>
+    
+    <p class="description">Upload a zip file to GitHub and automatically unzip it with a GitHub Actions workflow</p>
+    
+    <div class="container">
+        <div class="form-group">
+            <label for="githubToken">GitHub Personal Access Token</label>
+            <input type="password" id="githubToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" />
+        </div>
+        
+        <div class="form-group">
+            <label for="repoName">Repository Name</label>
+            <input type="text" id="repoName" placeholder="my-unzipped-project" />
+        </div>
+        
+        <div class="form-group">
+            <label for="repoDescription">Repository Description (Optional)</label>
+            <input type="text" id="repoDescription" placeholder="Description of my unzipped project" />
+        </div>
+        
+        <div class="form-group">
+            <label for="branchName">Branch Name</label>
+            <input type="text" id="branchName" value="main" placeholder="main" />
+        </div>
+        
+        <div class="form-group">
+            <label for="workflowName">Workflow Name</label>
+            <input type="text" id="workflowName" value="Unzip and Deploy" placeholder="Unzip and Deploy" />
+        </div>
+        
+        <div class="file-input-container">
+            <label>Zip File to Upload</label>
+            <div class="file-input" id="dropZone">
+                <i>📦</i>
+                <p>Drag & drop your zip file here or click to browse</p>
+                <input type="file" id="zipFile" accept=".zip" style="display: none;" />
+            </div>
+        </div>
+        
+        <button id="uploadBtn" class="btn">Upload & Unzip</button>
+        
+        <div class="progress-container" id="progressContainer">
+            <div class="progress-bar">
+                <div class="progress" id="progressBar"></div>
+            </div>
+            <div class="status" id="statusText">Initializing...</div>
+        </div>
+        
+        <div class="result" id="resultContainer">
+            <h3 id="resultTitle">Result</h3>
+            <pre id="resultContent"></pre>
+        </div>
+    </div>
+    
+    <div class="instructions">
+        <h3>How to use this tool:</h3>
+        <ol>
+            <li>Create a GitHub Personal Access Token with <code>repo</code> permissions</li>
+            <li>Enter your token, repository name, and other details</li>
+            <li>Select a zip file to upload</li>
+            <li>Click "Upload & Unzip"</li>
+            <li>The tool will create a new GitHub repository, upload your zip file, and set up a workflow to automatically unzip it</li>
+            <li>Check the Actions tab in your new repository to see the unzip progress</li>
+        </ol>
+    </div>
+    
+    <footer>
+        <p>This tool uses GitHub API to create repositories and workflows</p>
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const githubTokenInput = document.getElementById('githubToken');
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('zipFile');
+            const uploadBtn = document.getElementById('uploadBtn');
+
+            // Load token from localStorage
+            const savedToken = localStorage.getItem('githubToken');
+            if (savedToken) {
+                githubTokenInput.value = savedToken;
+            }
+
+            // Save token to localStorage on input
+            githubTokenInput.addEventListener('input', () => {
+                localStorage.setItem('githubToken', githubTokenInput.value);
+            });
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const statusText = document.getElementById('statusText');
+            const resultContainer = document.getElementById('resultContainer');
+            const resultTitle = document.getElementById('resultTitle');
+            const resultContent = document.getElementById('resultContent');
+            
+            // Drag and drop handling
+            dropZone.addEventListener('click', () => {
+                fileInput.click();
+            });
+            
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('drag-over');
+            });
+            
+            dropZone.addEventListener('dragleave', () => {
+                dropZone.classList.remove('drag-over');
+            });
+            
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('drag-over');
+                
+                if (e.dataTransfer.files.length) {
+                    fileInput.files = e.dataTransfer.files;
+                    updateFileDisplay();
+                }
+            });
+            
+            fileInput.addEventListener('change', updateFileDisplay);
+            
+            function updateFileDisplay() {
+                if (fileInput.files.length) {
+                    const file = fileInput.files[0];
+                    dropZone.innerHTML = `<i>📦</i><p>Selected: ${file.name} (${formatFileSize(file.size)})</p>`;
+                }
+            }
+            
+            function formatFileSize(bytes) {
+                if (bytes === 0) return '0 Bytes';
+                const k = 1024;
+                const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            }
+            
+            // Upload handling
+            uploadBtn.addEventListener('click', async () => {
+                const token = document.getElementById('githubToken').value;
+                const repoName = document.getElementById('repoName').value;
+                const repoDescription = document.getElementById('repoDescription').value;
+                const branchName = document.getElementById('branchName').value || 'main';
+                const workflowName = document.getElementById('workflowName').value;
+                const file = fileInput.files[0];
+                
+                if (!token) {
+                    showResult('Error', 'Please enter a GitHub Personal Access Token', 'error');
+                    return;
+                }
+                
+                if (!repoName) {
+                    showResult('Error', 'Please enter a repository name', 'error');
+                    return;
+                }
+                
+                if (!file) {
+                    showResult('Error', 'Please select a zip file to upload', 'error');
+                    return;
+                }
+                
+                // Reset UI
+                progressContainer.style.display = 'block';
+                progressBar.style.width = '0%';
+                statusText.textContent = 'Initializing...';
+                resultContainer.style.display = 'none';
+                uploadBtn.disabled = true;
+                
+                try {
+                    // Step 1: Create repository
+                    updateProgress(10, 'Creating repository...');
+                    const repo = await createRepository(token, repoName, repoDescription);
+                    
+                    // Step 2: Upload files and create workflow
+                    updateProgress(30, 'Preparing files for upload...');
+                    await uploadAndDeploy(token, repo.owner.login, repo.name, branchName, file, workflowName);
+
+                    // Step 3: Complete
+                    updateProgress(100, 'Complete!');
+                    
+                    showResult('Success!', 
+                        `Repository created: ${repo.html_url}\n\n` +
+                        `Zip file uploaded and workflow created.\n\n` +
+                        `Check the "Actions" tab in your new repository to see the unzip progress. It might take a minute for the workflow to start.`,
+                        'success');
+
+                } catch (error) {
+                    console.error('Upload failed:', error);
+                    let errorMessage = 'An unknown error occurred.';
+                    if (error) {
+                        errorMessage = `Message: ${error.message}\n\nStack Trace:\n${error.stack}\n\nFull Error:\n${JSON.stringify(error, null, 2)}`;
+                    }
+                    showResult('Error', errorMessage, 'error');
+                } finally {
+                    uploadBtn.disabled = false;
+                }
+            });
+            
+            function updateProgress(percent, status) {
+                progressBar.style.width = percent + '%';
+                statusText.textContent = status;
+            }
+            
+            function showResult(title, content, type) {
+                resultTitle.textContent = title;
+                resultContent.textContent = content;
+                resultContainer.className = 'result ' + type;
+                resultContainer.style.display = 'block';
+            }
+            
+            async function githubApiRequest(url, token, options = {}) {
+                const response = await fetch(url, {
+                    ...options,
+                    headers: {
+                        'Authorization': `token ${token}`,
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/vnd.github.v3+json',
+                        ...options.headers,
+                    },
+                });
+                if (!response.ok) {
+                    const error = await response.json().catch(() => ({}));
+                    throw new Error(error.message || `GitHub API request failed: ${response.status}`);
+                }
+                return response.json();
+            }
+
+            async function createRepository(token, name, description) {
+                return githubApiRequest('https://api.github.com/user/repos', token, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        name,
+                        description: description || 'Repository with auto-unzip workflow',
+                        auto_init: true,
+                        private: false
+                    }),
+                });
+            }
+
+            function getFileAsBase64(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = error => reject(error);
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            async function uploadAndDeploy(token, owner, repo, branch, file, workflowName) {
+                const workflowFileName = 'unzip.yml';
+                const workflowPath = `.github/workflows/${workflowFileName}`;
+
+                // Step 1: Get latest commit SHA
+                updateProgress(40, 'Fetching repository state...');
+                const latestCommit = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`, token);
+                const latestCommitSha = latestCommit.object.sha;
+
+                // Step 2: Create blobs for zip and workflow
+                updateProgress(50, 'Encoding files...');
+                const fileContent = await getFileAsBase64(file);
+
+                const workflowContent = `
+name: ${workflowName}
+
+on:
+  push:
+    branches:
+      - ${branch}
+
+permissions:
+  contents: write
+
+jobs:
+  unzip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Unzip the file
+        run: unzip -o "${file.name}"
+
+      - name: List files for debugging
+        run: ls -laR
+
+      - name: Commit unzipped files
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Auto-commit unzipped files"
+          file_pattern: "*"
+`;
+
+                updateProgress(60, 'Uploading files to repository...');
+                const fileBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                    method: 'POST',
+                    body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
+                });
+
+                const workflowBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                    method: 'POST',
+                    body: JSON.stringify({ content: workflowContent, encoding: 'utf-8' }),
+                });
+
+                // Step 3: Create a new tree
+                updateProgress(70, 'Updating repository structure...');
+                const tree = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/trees`, token, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        base_tree: latestCommitSha,
+                        tree: [
+                            { path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha },
+                            { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha },
+                        ],
+                    }),
+                });
+
+                // Step 4: Create a new commit
+                updateProgress(80, 'Committing changes...');
+                const commit = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/commits`, token, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        message: 'feat: Add zip file and unzip workflow',
+                        parents: [latestCommitSha],
+                        tree: tree.sha,
+                    }),
+                });
+
+                // Step 5: Update branch reference
+                updateProgress(90, 'Finalizing deployment...');
+                await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/refs/heads/${branch}`, token, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ sha: commit.sha }),
+                });
+            }
+        });
+    </script>
+</body>
+</html>
