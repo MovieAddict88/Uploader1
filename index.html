@@ -470,34 +470,43 @@
                 return response.json();
             }
 
-            async function uploadReleaseAsset(uploadUrl, token, file) {
-                return new Promise((resolve, reject) => {
-                    const xhr = new XMLHttpRequest();
-                    const actualUrl = uploadUrl.replace(/\{.*?\}/, '') + `?name=${encodeURIComponent(file.name)}`;
+            async function uploadFileInChunks(owner, repo, token, file) {
+                const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB chunks
+                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                const chunkBlobs = [];
 
-                    xhr.open('POST', actualUrl);
-                    xhr.setRequestHeader('Authorization', `token ${token}`);
-                    xhr.setRequestHeader('Content-Type', 'application/zip');
-                    xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(file.size, start + CHUNK_SIZE);
+                    const chunk = file.slice(start, end);
 
-                    xhr.upload.onprogress = (e) => {
-                        if (e.lengthComputable) {
-                            const percentComplete = Math.round((e.loaded / e.total) * 100);
-                            updateProgress(60 + (percentComplete * 0.3), `Uploading zip file... ${percentComplete}%`);
-                        }
-                    };
+                    updateProgress(45 + (i / totalChunks * 30), `Uploading part ${i + 1}/${totalChunks}...`);
 
-                    xhr.onload = () => {
-                        if (xhr.status >= 200 && xhr.status < 300) {
-                            resolve(JSON.parse(xhr.responseText));
-                        } else {
-                            reject(new Error(`Asset upload failed: ${xhr.status} ${xhr.statusText}\n${xhr.responseText}`));
-                        }
-                    };
+                    const base64Chunk = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const bytes = new Uint8Array(reader.result);
+                            let binary = '';
+                            for (let j = 0; j < bytes.byteLength; j++) {
+                                binary += String.fromCharCode(bytes[j]);
+                            }
+                            resolve(btoa(binary));
+                        };
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(chunk);
+                    });
 
-                    xhr.onerror = () => reject(new Error('Asset upload failed due to a network error.'));
-                    xhr.send(file);
-                });
+                    const blob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: base64Chunk, encoding: 'base64' }),
+                    });
+
+                    chunkBlobs.push({
+                        path: `zip-parts/part-${i.toString().padStart(3, '0')}`,
+                        sha: blob.sha
+                    });
+                }
+                return chunkBlobs;
             }
 
             async function createRepository(token, name, description) {
@@ -525,25 +534,17 @@
                 const isLargeFile = file.size > 40 * 1024 * 1024;
                 const workflowFileName = 'unzip.yml';
                 const workflowPath = `.github/workflows/${workflowFileName}`;
-                let releaseData = null;
+                let chunkBlobs = [];
 
                 // Step 1: Get latest commit SHA
                 updateProgress(40, 'Fetching repository state...');
                 const latestCommit = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`, token);
                 const latestCommitSha = latestCommit.object.sha;
 
-                // Step 2: Prepare zip file (Release for large, Base64 for small)
+                // Step 2: Prepare zip file (Chunked for large, Single for small)
                 let fileContent = '';
                 if (isLargeFile) {
-                    updateProgress(45, 'Creating temporary release for large file...');
-                    releaseData = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/releases`, token, {
-                        method: 'POST',
-                        body: JSON.stringify({
-                            tag_name: 'temp-upload-' + Date.now(),
-                            name: 'Temporary Upload for ' + file.name,
-                            draft: true
-                        })
-                    });
+                    chunkBlobs = await uploadFileInChunks(owner, repo, token, file);
                 } else {
                     updateProgress(50, 'Encoding files...');
                     fileContent = await getFileAsBase64(file);
@@ -568,17 +569,20 @@ jobs:
         uses: actions/checkout@v3
 
       ${isLargeFile ? `
-      - name: Download zip from release
-        run: gh release download ${releaseData.tag_name} -p "${file.name}"
-        env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+      - name: Reconstruct zip file
+        run: |
+          cat zip-parts/part-* > "${file.name}"
+          rm -rf zip-parts
       ` : ''}
 
       - name: Unzip the file
         run: unzip -o "${file.name}"
 
-      - name: Remove zip file
-        run: rm "${file.name}"
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f "${file.name}"
+          rm -rf zip-parts
 
       - name: List files for debugging
         run: ls -laR
@@ -588,39 +592,33 @@ jobs:
         with:
           commit_message: "Auto-commit unzipped files"
           file_pattern: "*"
-
-      ${isLargeFile ? `
-      - name: Cleanup release
-        if: always()
-        run: gh release delete ${releaseData.tag_name} --yes
-        env:
-          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-      ` : ''}
 `;
 
-                updateProgress(60, 'Uploading files to repository...');
-                let fileBlob = { sha: null };
-                if (isLargeFile) {
-                    await uploadReleaseAsset(releaseData.upload_url, token, file);
-                } else {
-                    const fileBlobData = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
-                        method: 'POST',
-                        body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
-                    });
-                    fileBlob.sha = fileBlobData.sha;
-                }
-
+                updateProgress(75, 'Creating workflow blob...');
                 const workflowBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
                     method: 'POST',
                     body: JSON.stringify({ content: workflowContent, encoding: 'utf-8' }),
                 });
 
                 // Step 3: Create a new tree
-                updateProgress(70, 'Updating repository structure...');
+                updateProgress(80, 'Updating repository structure...');
                 const treeItems = [
                     { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha }
                 ];
-                if (!isLargeFile) {
+                if (isLargeFile) {
+                    chunkBlobs.forEach(chunk => {
+                        treeItems.push({
+                            path: chunk.path,
+                            mode: '100644',
+                            type: 'blob',
+                            sha: chunk.sha
+                        });
+                    });
+                } else {
+                    const fileBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
+                    });
                     treeItems.push({ path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha });
                 }
 
