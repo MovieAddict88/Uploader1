@@ -305,8 +305,9 @@
             <li>Enter your token, repository name, and other details</li>
             <li>Select a zip file to upload</li>
             <li>Click "Upload & Unzip"</li>
-            <li>The tool will create a new GitHub repository, upload your zip file, and set up a workflow to automatically unzip it</li>
+            <li>The tool will create a new GitHub repository, upload your zip file (supporting files up to 2GB), and set up a workflow to automatically unzip it</li>
             <li>Check the Actions tab in your new repository to see the unzip progress</li>
+            <li style="color: #f85149; font-weight: bold;">Note: Individual unzipped files must be under 100MB (GitHub's standard file limit).</li>
         </ol>
     </div>
     
@@ -469,6 +470,36 @@
                 return response.json();
             }
 
+            async function uploadReleaseAsset(uploadUrl, token, file) {
+                return new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    const actualUrl = uploadUrl.replace(/\{.*?\}/, '') + `?name=${encodeURIComponent(file.name)}`;
+
+                    xhr.open('POST', actualUrl);
+                    xhr.setRequestHeader('Authorization', `token ${token}`);
+                    xhr.setRequestHeader('Content-Type', 'application/zip');
+                    xhr.setRequestHeader('Accept', 'application/vnd.github.v3+json');
+
+                    xhr.upload.onprogress = (e) => {
+                        if (e.lengthComputable) {
+                            const percentComplete = Math.round((e.loaded / e.total) * 100);
+                            updateProgress(60 + (percentComplete * 0.3), `Uploading zip file... ${percentComplete}%`);
+                        }
+                    };
+
+                    xhr.onload = () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            resolve(JSON.parse(xhr.responseText));
+                        } else {
+                            reject(new Error(`Asset upload failed: ${xhr.status} ${xhr.statusText}\n${xhr.responseText}`));
+                        }
+                    };
+
+                    xhr.onerror = () => reject(new Error('Asset upload failed due to a network error.'));
+                    xhr.send(file);
+                });
+            }
+
             async function createRepository(token, name, description) {
                 return githubApiRequest('https://api.github.com/user/repos', token, {
                     method: 'POST',
@@ -491,17 +522,32 @@
             }
 
             async function uploadAndDeploy(token, owner, repo, branch, file, workflowName) {
+                const isLargeFile = file.size > 40 * 1024 * 1024;
                 const workflowFileName = 'unzip.yml';
                 const workflowPath = `.github/workflows/${workflowFileName}`;
+                let releaseData = null;
 
                 // Step 1: Get latest commit SHA
                 updateProgress(40, 'Fetching repository state...');
                 const latestCommit = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`, token);
                 const latestCommitSha = latestCommit.object.sha;
 
-                // Step 2: Create blobs for zip and workflow
-                updateProgress(50, 'Encoding files...');
-                const fileContent = await getFileAsBase64(file);
+                // Step 2: Prepare zip file (Release for large, Base64 for small)
+                let fileContent = '';
+                if (isLargeFile) {
+                    updateProgress(45, 'Creating temporary release for large file...');
+                    releaseData = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/releases`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            tag_name: 'temp-upload-' + Date.now(),
+                            name: 'Temporary Upload for ' + file.name,
+                            draft: true
+                        })
+                    });
+                } else {
+                    updateProgress(50, 'Encoding files...');
+                    fileContent = await getFileAsBase64(file);
+                }
 
                 const workflowContent = `
 name: ${workflowName}
@@ -521,8 +567,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      ${isLargeFile ? `
+      - name: Download zip from release
+        run: gh release download ${releaseData.tag_name} -p "${file.name}"
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+      ` : ''}
+
       - name: Unzip the file
         run: unzip -o "${file.name}"
+
+      - name: Remove zip file
+        run: rm "${file.name}"
 
       - name: List files for debugging
         run: ls -laR
@@ -532,13 +588,27 @@ jobs:
         with:
           commit_message: "Auto-commit unzipped files"
           file_pattern: "*"
+
+      ${isLargeFile ? `
+      - name: Cleanup release
+        if: always()
+        run: gh release delete ${releaseData.tag_name} --yes
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+      ` : ''}
 `;
 
                 updateProgress(60, 'Uploading files to repository...');
-                const fileBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
-                    method: 'POST',
-                    body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
-                });
+                let fileBlob = { sha: null };
+                if (isLargeFile) {
+                    await uploadReleaseAsset(releaseData.upload_url, token, file);
+                } else {
+                    const fileBlobData = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
+                    });
+                    fileBlob.sha = fileBlobData.sha;
+                }
 
                 const workflowBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
                     method: 'POST',
@@ -547,14 +617,18 @@ jobs:
 
                 // Step 3: Create a new tree
                 updateProgress(70, 'Updating repository structure...');
+                const treeItems = [
+                    { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha }
+                ];
+                if (!isLargeFile) {
+                    treeItems.push({ path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha });
+                }
+
                 const tree = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/trees`, token, {
                     method: 'POST',
                     body: JSON.stringify({
                         base_tree: latestCommitSha,
-                        tree: [
-                            { path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha },
-                            { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha },
-                        ],
+                        tree: treeItems,
                     }),
                 });
 
