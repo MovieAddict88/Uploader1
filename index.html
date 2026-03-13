@@ -305,8 +305,9 @@
             <li>Enter your token, repository name, and other details</li>
             <li>Select a zip file to upload</li>
             <li>Click "Upload & Unzip"</li>
-            <li>The tool will create a new GitHub repository, upload your zip file, and set up a workflow to automatically unzip it</li>
+            <li>The tool will create a new GitHub repository, upload your zip file (supporting files up to 2GB), and set up a workflow to automatically unzip it</li>
             <li>Check the Actions tab in your new repository to see the unzip progress</li>
+            <li style="color: #f85149; font-weight: bold;">Note: Individual unzipped files must be under 100MB (GitHub's standard file limit).</li>
         </ol>
     </div>
     
@@ -469,6 +470,45 @@
                 return response.json();
             }
 
+            async function uploadFileInChunks(owner, repo, token, file) {
+                const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB chunks
+                const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                const chunkBlobs = [];
+
+                for (let i = 0; i < totalChunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(file.size, start + CHUNK_SIZE);
+                    const chunk = file.slice(start, end);
+
+                    updateProgress(45 + (i / totalChunks * 30), `Uploading part ${i + 1}/${totalChunks}...`);
+
+                    const base64Chunk = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            const bytes = new Uint8Array(reader.result);
+                            let binary = '';
+                            for (let j = 0; j < bytes.byteLength; j++) {
+                                binary += String.fromCharCode(bytes[j]);
+                            }
+                            resolve(btoa(binary));
+                        };
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(chunk);
+                    });
+
+                    const blob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: base64Chunk, encoding: 'base64' }),
+                    });
+
+                    chunkBlobs.push({
+                        path: `zip-parts/part-${i.toString().padStart(3, '0')}`,
+                        sha: blob.sha
+                    });
+                }
+                return chunkBlobs;
+            }
+
             async function createRepository(token, name, description) {
                 return githubApiRequest('https://api.github.com/user/repos', token, {
                     method: 'POST',
@@ -491,17 +531,24 @@
             }
 
             async function uploadAndDeploy(token, owner, repo, branch, file, workflowName) {
+                const isLargeFile = file.size > 40 * 1024 * 1024;
                 const workflowFileName = 'unzip.yml';
                 const workflowPath = `.github/workflows/${workflowFileName}`;
+                let chunkBlobs = [];
 
                 // Step 1: Get latest commit SHA
                 updateProgress(40, 'Fetching repository state...');
                 const latestCommit = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`, token);
                 const latestCommitSha = latestCommit.object.sha;
 
-                // Step 2: Create blobs for zip and workflow
-                updateProgress(50, 'Encoding files...');
-                const fileContent = await getFileAsBase64(file);
+                // Step 2: Prepare zip file (Chunked for large, Single for small)
+                let fileContent = '';
+                if (isLargeFile) {
+                    chunkBlobs = await uploadFileInChunks(owner, repo, token, file);
+                } else {
+                    updateProgress(50, 'Encoding files...');
+                    fileContent = await getFileAsBase64(file);
+                }
 
                 const workflowContent = `
 name: ${workflowName}
@@ -521,8 +568,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      ${isLargeFile ? `
+      - name: Reconstruct zip file
+        run: |
+          cat zip-parts/part-* > "${file.name}"
+          rm -rf zip-parts
+      ` : ''}
+
       - name: Unzip the file
         run: unzip -o "${file.name}"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f "${file.name}"
+          rm -rf zip-parts
 
       - name: List files for debugging
         run: ls -laR
@@ -534,27 +594,39 @@ jobs:
           file_pattern: "*"
 `;
 
-                updateProgress(60, 'Uploading files to repository...');
-                const fileBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
-                    method: 'POST',
-                    body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
-                });
-
+                updateProgress(75, 'Creating workflow blob...');
                 const workflowBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
                     method: 'POST',
                     body: JSON.stringify({ content: workflowContent, encoding: 'utf-8' }),
                 });
 
                 // Step 3: Create a new tree
-                updateProgress(70, 'Updating repository structure...');
+                updateProgress(80, 'Updating repository structure...');
+                const treeItems = [
+                    { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha }
+                ];
+                if (isLargeFile) {
+                    chunkBlobs.forEach(chunk => {
+                        treeItems.push({
+                            path: chunk.path,
+                            mode: '100644',
+                            type: 'blob',
+                            sha: chunk.sha
+                        });
+                    });
+                } else {
+                    const fileBlob = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/blobs`, token, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: fileContent, encoding: 'base64' }),
+                    });
+                    treeItems.push({ path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha });
+                }
+
                 const tree = await githubApiRequest(`https://api.github.com/repos/${owner}/${repo}/git/trees`, token, {
                     method: 'POST',
                     body: JSON.stringify({
                         base_tree: latestCommitSha,
-                        tree: [
-                            { path: file.name, mode: '100644', type: 'blob', sha: fileBlob.sha },
-                            { path: workflowPath, mode: '100644', type: 'blob', sha: workflowBlob.sha },
-                        ],
+                        tree: treeItems,
                     }),
                 });
 
